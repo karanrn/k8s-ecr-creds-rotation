@@ -33,6 +33,10 @@ const (
 	// Docker config constants
 	AuthList = "auths"
 	AuthKey = "auth"
+	DockerConfigJson = ".dockerconfigjson"
+
+	SecretName = "regcred"
+	Empty = ""
 )
 
 
@@ -100,13 +104,34 @@ func main() {
 
 }
 
+func ListAndUpdate(client *kubernetes.Clientset) {
+	namespaces, err := client.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		fmt.Printf("failed to list namespaces: %v\n", err)
+	}
+
+	dockerConfig, err := RotateECRCreds()
+	if err != nil {
+		fmt.Printf("failed to get docker config: %v\n", err)
+	}
+	for _, ns := range namespaces.Items {
+		err := UpdateSecret(client, ns.Name, dockerConfig)
+		if err != nil {
+			fmt.Printf("failed to update secret %s in namespace %s: %v\n", SecretName, ns.Name, err)
+		}
+	}
+}
+
 func startWatching(stopCh <-chan struct{}, s cache.SharedIndexInformer, client *kubernetes.Clientset) {
 	handlers := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			u := obj.(*unstructured.Unstructured)
 			ns := u.GetName()
 			fmt.Printf("received add event! for %v\n", ns)
-			dockerConfig := RotateECRCreds()
+			dockerConfig, err := RotateECRCreds()
+			if err != nil {
+				fmt.Printf("failed to get docker config: %v", err)
+			}
 			CreateSecret(client, ns, dockerConfig)
 		},
 		UpdateFunc: func(oldObj, obj interface{}) {
@@ -123,13 +148,13 @@ func startWatching(stopCh <-chan struct{}, s cache.SharedIndexInformer, client *
 	s.Run(stopCh)
 }
 
-func CreateSecret(client *kubernetes.Clientset, namespace string, value string) {
+func CreateSecret(client *kubernetes.Clientset, namespace string, value string) error {
 	secretClient := client.CoreV1().Secrets(namespace)
 	data := make(map[string]string)
-	data[".dockerconfigjson"] = value
+	data[DockerConfigJson] = value
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:  "regcred",
+			Name:  SecretName,
 		},
 		StringData: data,
 		Type:       corev1.SecretTypeDockerConfigJson,
@@ -137,40 +162,42 @@ func CreateSecret(client *kubernetes.Clientset, namespace string, value string) 
 	result, err := secretClient.Create(context.Background(), secret, metav1.CreateOptions{})
 	if err != nil {
 		fmt.Printf("failed creating secret: %v", err)
+		return err
 	}
 	fmt.Printf("Created secret %q.\n", result.GetObjectMeta().GetName())
+	return nil
 }
 
-func UpdateSecret(client *kubernetes.Clientset, namespace string, value string) {
+func UpdateSecret(client *kubernetes.Clientset, namespace string, value string) error {
 	secretClient := client.CoreV1().Secrets(namespace)
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		// Retrieve the latest version of secret before attempting update
 		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
-		result, getErr := secretClient.Get(context.TODO(), "regcred", metav1.GetOptions{})
+		result, getErr := secretClient.Get(context.TODO(), SecretName, metav1.GetOptions{})
 		if getErr != nil {
 			fmt.Printf("Failed to get latest version of secret: %v", getErr)
+			return getErr
 		}
 
 		data := make(map[string]string)
-		data[".dockerconfigjson"] = value
+		data[DockerConfigJson] = value
 		result.StringData = data
 		_, updateErr := secretClient.Update(context.TODO(), result, metav1.UpdateOptions{})
 		return updateErr
 	})
 	if retryErr != nil {
 		fmt.Printf("Update failed: %v", retryErr)
+		return retryErr
 	}
+	return nil
 }
 
-func RotateECRCreds() string {
+func RotateECRCreds() (string, error) {
 	// Read from ECR registry and region
 	registry := os.Getenv(ECRRegistry)
 	region := os.Getenv(Region)
 	accessKey := os.Getenv(AccessKey)
 	secretKey := os.Getenv(SecretAccessKey)
-
-	//fmt.Printf("Registry: %s\nRegion: %s\n", registry, region)
-	//fmt.Printf("Access Key: %s\nSecret Key: %s\n", accessKey, secretKey)
 
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
@@ -178,6 +205,7 @@ func RotateECRCreds() string {
 	)
 	if err != nil {
 		fmt.Printf("failed to create aws config: %v", err)
+		return Empty, err
 	}
 
 	// Get Authorization token for the ECR registry
@@ -185,8 +213,10 @@ func RotateECRCreds() string {
 	resp, err := ecrSvc.GetAuthorizationToken(context.Background(), &ecr.GetAuthorizationTokenInput{})
 	if err != nil {
 		fmt.Println(err.Error())
+		return Empty, err
 	}
-	//fmt.Printf("Proxy Endpoint: %v\n", *resp.AuthorizationData[0].ProxyEndpoint)
+
+	// Filter based on ECR registry
 	token := *resp.AuthorizationData[0].AuthorizationToken
 	//fmt.Printf("Token: %v\n\n", token)
 
@@ -197,8 +227,11 @@ func RotateECRCreds() string {
 	dockerConfig[AuthList] = map[string]map[string]string{}
 	dockerConfig[AuthList][registry] = map[string]string{}
 	dockerConfig[AuthList][registry][AuthKey] = encodedToken
-	jsonStr, _ := json.Marshal(dockerConfig)
-	//fmt.Println(string(jsonStr))
+	jsonStr, err := json.Marshal(dockerConfig)
+	if err != nil {
+		fmt.Printf("failed to marshal map to json: %v", err)
+		return Empty, err
+	}
 
-	return string(jsonStr)
+	return string(jsonStr), nil
 }
