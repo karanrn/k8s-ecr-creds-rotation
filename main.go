@@ -12,6 +12,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"os/signal"
+	"time"
+
+	//"k8s.io/apimachinery/pkg/runtime/schema"
+	//"k8s.io/client-go/dynamic"
+	//"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -19,8 +25,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	"os"
-	"os/signal"
-	"time"
+	//"os/signal"
+	//"time"
+	"github.com/robfig/cron/v3"
 )
 
 const (
@@ -52,7 +59,7 @@ func main() {
 	var kubeconfig = "/Users/karan.nadagoudarnutanix.com/Downloads/kubeconfigs/kubeconfig-demo.yaml"
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		fmt.Printf("failed to build kubeconfig: %v", err)
+		fmt.Printf("failed to build kubeconfig: %v\n", err)
 	}
 
 	// In-cluster setup
@@ -67,7 +74,7 @@ func main() {
 	// create the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		fmt.Printf("failed to create client from config: %v", err)
+		fmt.Printf("failed to create client from config: %v\n", err)
 	}
 
 	/*
@@ -81,9 +88,17 @@ func main() {
 	//fmt.Println(pods.Items)
 	*/
 
+	// Run cron to rotate and update secret
+	c := cron.New()
+	updateJob := UpdateJob{client: clientset}
+	//c.AddFunc("*/2 * * * *", func() { fmt.Println("Every hour on the half hour") })
+	c.AddJob("*/2 * * * *", updateJob)
+	c.Start()
+
+
 	clusterClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		fmt.Printf("failed to create client: %v", err)
+		fmt.Printf("failed to create client: %v\n", err)
 	}
 
 	// Listen/Watch for namespaces
@@ -100,12 +115,14 @@ func main() {
 
 	<-sigCh
 	close(stopCh)
-
-
 }
 
-func ListAndUpdate(client *kubernetes.Clientset) {
-	namespaces, err := client.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
+type UpdateJob struct {
+	client *kubernetes.Clientset
+}
+
+func (job UpdateJob) Run() {
+	namespaces, err := job.client.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		fmt.Printf("failed to list namespaces: %v\n", err)
 	}
@@ -115,10 +132,11 @@ func ListAndUpdate(client *kubernetes.Clientset) {
 		fmt.Printf("failed to get docker config: %v\n", err)
 	}
 	for _, ns := range namespaces.Items {
-		err := UpdateSecret(client, ns.Name, dockerConfig)
+		err := UpdateSecret(job.client, ns.Name, dockerConfig)
 		if err != nil {
 			fmt.Printf("failed to update secret %s in namespace %s: %v\n", SecretName, ns.Name, err)
 		}
+		fmt.Printf("updated secret in namespace: %s\n", ns.Name)
 	}
 }
 
@@ -130,18 +148,26 @@ func startWatching(stopCh <-chan struct{}, s cache.SharedIndexInformer, client *
 			fmt.Printf("received add event! for %v\n", ns)
 			dockerConfig, err := RotateECRCreds()
 			if err != nil {
-				fmt.Printf("failed to get docker config: %v", err)
+				fmt.Printf("failed to get docker config: %v\n", err)
 			}
-			CreateSecret(client, ns, dockerConfig)
+			err = CreateSecret(client, ns, dockerConfig)
+			if err != nil {
+				// Update secret
+				fmt.Printf("updating secret\n")
+				err = UpdateSecret(client, ns, dockerConfig)
+				if err != nil {
+					fmt.Printf("failed to update secret: %v\n", err)
+				}
+			}
 		},
-		UpdateFunc: func(oldObj, obj interface{}) {
-			u := obj.(*unstructured.Unstructured)
-			fmt.Printf("received update event! for %v\n", u.GetName())
-		},
-		DeleteFunc: func(obj interface{}) {
-			u := obj.(*unstructured.Unstructured)
-			fmt.Printf("received delete event! for %v\n", u.GetName())
-		},
+		//UpdateFunc: func(oldObj, obj interface{}) {
+		//	u := obj.(*unstructured.Unstructured)
+		//	fmt.Printf("received update event! for %v\n", u.GetName())
+		//},
+		//DeleteFunc: func(obj interface{}) {
+		//	u := obj.(*unstructured.Unstructured)
+		//	fmt.Printf("received delete event! for %v\n", u.GetName())
+		//},
 	}
 
 	s.AddEventHandler(handlers)
@@ -161,7 +187,7 @@ func CreateSecret(client *kubernetes.Clientset, namespace string, value string) 
 	}
 	result, err := secretClient.Create(context.Background(), secret, metav1.CreateOptions{})
 	if err != nil {
-		fmt.Printf("failed creating secret: %v", err)
+		fmt.Printf("failed creating secret: %v\n", err)
 		return err
 	}
 	fmt.Printf("Created secret %q.\n", result.GetObjectMeta().GetName())
@@ -175,7 +201,7 @@ func UpdateSecret(client *kubernetes.Clientset, namespace string, value string) 
 		// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
 		result, getErr := secretClient.Get(context.TODO(), SecretName, metav1.GetOptions{})
 		if getErr != nil {
-			fmt.Printf("Failed to get latest version of secret: %v", getErr)
+			fmt.Printf("Failed to get latest version of secret: %v\n", getErr)
 			return getErr
 		}
 
@@ -186,7 +212,7 @@ func UpdateSecret(client *kubernetes.Clientset, namespace string, value string) 
 		return updateErr
 	})
 	if retryErr != nil {
-		fmt.Printf("Update failed: %v", retryErr)
+		fmt.Printf("Update failed: %v\n", retryErr)
 		return retryErr
 	}
 	return nil
@@ -204,7 +230,7 @@ func RotateECRCreds() (string, error) {
 		config.WithRegion(region),
 	)
 	if err != nil {
-		fmt.Printf("failed to create aws config: %v", err)
+		fmt.Printf("failed to create aws config: %v\n", err)
 		return Empty, err
 	}
 
@@ -229,7 +255,7 @@ func RotateECRCreds() (string, error) {
 	dockerConfig[AuthList][registry][AuthKey] = encodedToken
 	jsonStr, err := json.Marshal(dockerConfig)
 	if err != nil {
-		fmt.Printf("failed to marshal map to json: %v", err)
+		fmt.Printf("failed to marshal map to json: %v\n", err)
 		return Empty, err
 	}
 
