@@ -17,7 +17,9 @@ node {
 
         stage "Loading common script"
             def common = load "/var/lib/jenkins/k8s_common.groovy"
-            common.build()
+            dir('crons/k8s-ecr-creds-rotation/') {
+                          common.build()
+                        }
     }
     catch (err) {
         stage 'Sending the error.'
