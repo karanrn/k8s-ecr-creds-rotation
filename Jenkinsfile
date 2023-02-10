@@ -13,7 +13,7 @@ node {
             }
 
         stage "Copy binary from pkg folder"
-        sh "cp crons/k8s-ecr-creds-rotation/pkg/ecr-creds-rotate ./"
+        sh "cp crons/k8s-ecr-creds-rotation/pkg/ecr-creds-rotate crons/k8s-ecr-creds-rotation/"
 
         stage "Loading common script"
             def common = load "/var/lib/jenkins/k8s_common.groovy"
