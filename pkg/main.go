@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
-	"ecrcredsrotate/pkg/secret"
-	"ecrcredsrotate/pkg/serviceaccount"
-	"ecrcredsrotate/pkg/utils"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/signal"
+	"time"
+
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
@@ -21,9 +22,10 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
-	"os"
-	"os/signal"
-	"time"
+
+	"ecrcredsrotate/pkg/secret"
+	"ecrcredsrotate/pkg/serviceaccount"
+	"ecrcredsrotate/pkg/utils"
 )
 
 const (
@@ -34,14 +36,14 @@ const (
 	DockerUser      = "AWS"
 
 	// Docker config constants
-	AuthList         = "auths"
-	AuthKey          = "auth"
+	AuthList = "auths"
+	AuthKey  = "auth"
 
-	DefaultSA  = "default"
-	Empty      = ""
+	DefaultSA = "default"
+	Empty     = ""
 
 	DefaultRegion = "us-east-1"
-	KubeConfig = "KUBECONFIG"
+	KubeConfig    = "KUBECONFIG"
 )
 
 var (
@@ -192,7 +194,7 @@ func RotateECRCreds() (string, error) {
 
 	// Filter based on ECR registry
 	token := *resp.AuthorizationData[0].AuthorizationToken
-	log.Infof(token)
+
 	// Create docker config
 	// Encode token to base64
 	var dockerConfig = map[string]map[string]map[string]string{}

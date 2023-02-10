@@ -12,7 +12,7 @@ import (
 
 const (
 	DockerConfigJson = ".dockerconfigjson"
-	CredSecretName = "regcred"
+	CredSecretName   = "regcred"
 )
 
 // CreateDockerConfig creates secret of type DockerConfigJson in the given namespace
