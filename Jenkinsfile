@@ -7,13 +7,13 @@ node {
             def root = tool type: 'go', name: 'go1191'
             // Export environment variables pointing to the directory where Go was installed
             withEnv(["GOROOT=${root}", "PATH+GO=${root}/bin"]){
-                dir('pkg/') {
+                dir('crons/k8s-ecr-creds-rotation/pkg/') {
                        sh "go build -o ecr-creds-rotate ."
                 }
             }
 
         stage "Copy binary from pkg folder"
-        sh "cp pkg/ecr-creds-rotate ./"
+        sh "cp crons/k8s-ecr-creds-rotation/pkg/ecr-creds-rotate ./"
 
         stage "Loading common script"
             def common = load "/var/lib/jenkins/k8s_common.groovy"
