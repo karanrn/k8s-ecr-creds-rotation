@@ -62,13 +62,12 @@ func main() {
 	if kubeconfig != Empty {
 		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 		if err != nil {
-			log.Errorf("failed to build from kubeconfig: %v", err)
-			os.Exit(1)
+			log.Fatalf("failed to build from kubeconfig: %v", err)
 		}
 	} else {
 		config, err = rest.InClusterConfig()
 		if err != nil {
-			panic(err.Error())
+			log.Fatalf(err.Error())
 		}
 	}
 
