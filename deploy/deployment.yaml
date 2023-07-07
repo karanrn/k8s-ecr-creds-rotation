@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ecr-creds-rotate
+  namespace: ecr-creds-rotate
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      app: "ecr-creds-rotate"
+      version: "1.0"
+  template:
+    metadata: 
+      labels:
+        app: "ecr-creds-rotate"
+        version: "1.0"
+    spec:
+      imagePullSecrets:
+      - name: regcred
+      containers:
+      - name: ecr-creds-rotate
+        image: karan4080/k8s-ecr-creds-rotation:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: "LOG_LEVEL"
+          value: "INFO"
+        envFrom:
+          - secretRef:
+              name: ecr-creds-rotate
+        command: ["/opt/ecr-creds-rotate"]
+        resources:
+          requests:
+           cpu: 50m
+          limits:
+           cpu: 100m
+      serviceAccountName: ecr-creds-rotate
